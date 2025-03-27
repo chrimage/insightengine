@@ -10,6 +10,10 @@ __pycache__/
 *.so
 .Python
 env/
+venv/
+.venv/
+virtualenv/
+ENV/
 build/
 develop-eggs/
 dist/

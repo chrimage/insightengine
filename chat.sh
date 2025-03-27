@@ -3,6 +3,21 @@
 # Script to launch interactive chat with the memory-enhanced AI system
 #
 
+# Check for virtual environment and activate if possible
+if [ -d "venv" ] && [ -f "venv/bin/activate" ]; then
+    # Only source if not already in the venv
+    if [ -z "$VIRTUAL_ENV" ]; then
+        echo "📦 Activating virtual environment..."
+        source venv/bin/activate
+    fi
+elif [ -d ".venv" ] && [ -f ".venv/bin/activate" ]; then
+    # Check for alternate venv directory
+    if [ -z "$VIRTUAL_ENV" ]; then
+        echo "📦 Activating virtual environment..."
+        source .venv/bin/activate
+    fi
+fi
+
 # Default values
 DB_PATH="memory.db"
 VERBOSE=false

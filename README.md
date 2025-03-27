@@ -28,23 +28,57 @@ memory_ai/
 - Python 3.8+
 - Google API key for Gemini access
 
-### Installation
+### Installation on Ubuntu
 
 1. Clone the repository:
-   ```
+   ```bash
    git clone https://github.com/chrimage/insightengine.git
    cd insightengine
    ```
 
-2. Install the required dependencies:
+2. Set up a Python virtual environment (recommended):
+   ```bash
+   # Install virtualenv if not already installed
+   sudo apt update
+   sudo apt install python3-venv
+
+   # Create a virtual environment
+   python3 -m venv venv
+
+   # Activate the virtual environment
+   source venv/bin/activate
    ```
+
+3. Install the required dependencies:
+   ```bash
+   pip install --upgrade pip
    pip install -r requirements.txt
    ```
 
-3. Set your Google API key:
+4. Set up environment variables:
+   ```bash
+   # Copy the example environment file
+   cp .env.example .env
+
+   # Edit the .env file with your preferred text editor
+   nano .env
    ```
-   export GOOGLE_API_KEY=your_key_here
+
+   Update the `.env` file with your Google API key and other settings:
    ```
+   GOOGLE_API_KEY=your_gemini_api_key_here
+   # Uncomment and modify other settings as needed
+   ```
+
+### Important Notes About `.env` File
+
+The system uses a `.env` file for configuration. A `.env.example` file is provided as a template. Make sure to:
+
+1. Create your `.env` file from the example: `cp .env.example .env`
+2. Add your Google API key for Gemini in the `.env` file
+3. Adjust other settings as needed (see [Environment Variables](#environment-variables) section)
+
+All scripts automatically load settings from this file, so you don't need to export environment variables manually.
 
 ### Usage
 
@@ -124,9 +158,27 @@ python -m memory_ai.tools.interact --db memory.db
 
 ## Customization
 
-- Adjust memory parameters in `core/config.py`
+- Adjust memory parameters in `core/config.py` or through your `.env` file
 - Modify prompt templates in `chat/prompts.py`
 - Extend quality assessment in `memory/quality.py`
+
+### Environment Variables
+
+InsightEngine supports configuration through environment variables in a `.env` file:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GOOGLE_API_KEY` | Your Google API key for Gemini access | None |
+| `DB_PATH` | Path to the SQLite database file | `memory.db` |
+| `LLM_MODEL` | Gemini model to use for text generation | `gemini-2.0-flash` |
+| `EMBEDDING_MODEL` | Model to use for embeddings | `models/text-embedding-004` |
+| `USE_DUMMY_EMBEDDINGS` | Use deterministic embeddings (no API calls) | `false` |
+| `VERBOSE_EMBEDDINGS` | Enable verbose logging for embeddings | `false` |
+| `DEBUG_EMBEDDINGS` | Enable debug logging for embedding API calls | `false` |
+| `BATCH_SIZE` | Batch size for processing | `10` |
+| `MAX_TOKENS` | Maximum tokens for LLM context | `8000` |
+| `QUALITY_THRESHOLD` | Threshold for memory quality filtering | `0.6` |
+| `DAYS_THRESHOLD` | Days before memories start to decay | `180` |
 
 ## License
 

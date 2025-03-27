@@ -132,6 +132,10 @@ class GeminiClient:
         
         raise Exception("Failed after maximum retries")
     
+    def generate_embedding(self, text):
+        """Alias for generate_embeddings, for API compatibility."""
+        return self.generate_embeddings(text)
+        
     def generate_embeddings(self, text, chunk_size=1900):  # Keep below 2048 token limit
         """Generate embeddings with rate limiting and retries.
         
