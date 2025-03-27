@@ -32,7 +32,7 @@ memory_ai/
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/insightengine.git
+   git clone https://github.com/chrimage/insightengine.git
    cd insightengine
    ```
 
@@ -50,7 +50,13 @@ memory_ai/
 
 #### Indexing OpenAI Conversations
 
-To index your OpenAI conversation exports:
+To index your OpenAI conversation exports, use the provided shell script:
+
+```bash
+./index_conversations.sh /path/to/openai_conversations memory.db
+```
+
+Or run the Python module directly:
 
 ```bash
 python -m memory_ai.tools.index --input /path/to/openai_conversations --db memory.db
@@ -58,21 +64,37 @@ python -m memory_ai.tools.index --input /path/to/openai_conversations --db memor
 
 #### Generating Summaries
 
-Generate rolling summaries from the indexed conversations:
+Generate rolling summaries from the indexed conversations using the provided shell script:
+
+```bash
+./summarize_conversations.sh memory.db
+```
+
+Or run the Python module directly:
 
 ```bash
 python -m memory_ai.tools.summarize --db memory.db
 ```
 
-Apply the forgetting mechanism to remove outdated information:
+You can also use additional options:
 
 ```bash
-python -m memory_ai.tools.summarize --db memory.db --apply-forgetting
+# Rebuild all summaries
+./summarize_conversations.sh memory.db --rebuild
+
+# Search for summaries by theme
+./summarize_conversations.sh memory.db --themes "artificial intelligence"
 ```
 
 #### Interactive Chat
 
 Start an interactive chat session:
+
+```bash
+./chat.sh memory.db
+```
+
+Or run the Python module directly:
 
 ```bash
 python -m memory_ai.tools.interact --db memory.db
@@ -88,7 +110,7 @@ python -m memory_ai.tools.interact --db memory.db
 
 1. **Indexing**: OpenAI conversation exports are parsed, indexed, and stored in a SQLite database with vector embeddings for search.
 
-2. **Rolling Summaries**: The system processes conversations in chronological order to build a comprehensive understanding of topics, preferences, and information.
+2. **Rolling Summaries**: The system processes conversations in chronological order to build a comprehensive understanding of topics, preferences, and information. Summaries include structured sections for core interests, technical expertise, and recurring topics.
 
 3. **Context Assembly**: When responding to queries, the system combines:
    - Rolling summaries for broad context
@@ -96,7 +118,7 @@ python -m memory_ai.tools.interact --db memory.db
    - Learned insights from past interactions
    - Current conversation history
 
-4. **Quality Assessment**: Memory quality is evaluated based on information density, coherence, specificity, and factual likelihood.
+4. **Quality Assessment**: Memory quality is evaluated based on information density, coherence, specificity, and factual likelihood. The system prioritizes high-quality conversations while maintaining chronological ordering.
 
 5. **Self-Reflection**: The system evaluates its own responses to extract actionable insights for improving future interactions.
 
