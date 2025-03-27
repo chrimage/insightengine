@@ -395,7 +395,7 @@ class RollingSummaryProcessor:
         """Generate a new summary incorporating the previous summary and new content."""
         if previous_summary:
             prompt = f"""
-            You are creating an insightful, structured memory system for an AI assistant. Your task is to maintain a comprehensive yet usable summary of all user conversations.
+            You are creating an insightful, structured memory system for an AI assistant. Your task is to maintain a comprehensive yet **highly focused** summary of all user conversations.
 
             Below is the previous summary followed by new conversations to integrate:
 
@@ -409,22 +409,23 @@ class RollingSummaryProcessor:
 
             Generate an updated summary with these characteristics:
             
-            1. DO NOT include any of the prompt markers (like "PREVIOUS_SUMMARY" or "END_NEW_CONVERSATIONS") in your response
-            2. DO NOT preface your response with phrases like "Here's the updated summary" or "Summary:"
-            3. Focus on identifying KEY INSIGHTS and PATTERNS, not detailed recaps of every conversation
-            4. Begin with a "CORE INTERESTS" section listing 3-7 main areas of interest shown across conversations
-            5. Group information by THEMES (technical subjects, creative projects, personal interests) rather than chronology
-            6. For each theme, provide bullet points of relevant insights, preferences, and expertise
-            7. Add a "TECHNICAL EXPERTISE" section identifying areas where the user has demonstrated knowledge
-            8. Include a "RECURRING TOPICS" section for subjects that appear multiple times
-            9. When information is updated or contradicted, retain only the latest version
-            10. For important timestamps (project deadlines, significant events), use the format YYYY-MM-DD
+            1. DO NOT include any of the prompt markers (like "PREVIOUS_SUMMARY" or "END_NEW_CONVERSATIONS") in your response.
+            2. DO NOT preface your response with phrases like "Here's the updated summary" or "Summary:".
+            3. Focus **strictly** on identifying **significant, recurring KEY INSIGHTS and PATTERNS**. Avoid detailed recaps or isolated facts from individual conversations.
+            4. Begin with a "CORE INTERESTS" section listing 3-7 main areas of interest demonstrated **repeatedly** across conversations.
+            5. Group information by **major THEMES** (technical subjects, creative projects, personal interests) rather than chronology.
+            6. For each theme, provide **concise** bullet points highlighting **only the most relevant and enduring** insights, preferences, and expertise. **Exclude trivial details:** one-off mentions, minor examples, specific commands/tools used infrequently unless they illustrate a core skill or recurring pattern.
+            7. Add a "TECHNICAL EXPERTISE" section identifying areas where the user has **consistently** demonstrated knowledge or significant experience.
+            8. Include a "RECURRING TOPICS" section for subjects that appear **multiple times with substance**.
+            9. When information is updated or contradicted, retain **only the latest, most accurate version**.
+            10. For important timestamps (project deadlines, significant events), use the format YYYY-MM-DD.
+            11. **DO NOT create exhaustive lists.** For example, instead of listing every Linux command mentioned, summarize the user's proficiency in Linux command-line usage. Instead of listing every song mentioned for image generation, summarize the interest in generating images for song lyrics, perhaps noting a few key examples if they represent a broader style or theme.
 
-            The summary should be immediately useful for an AI to understand this user's core interests, expertise, and patterns without needing to process all historical conversations again.
+            The summary should be immediately useful for an AI to understand this user's **core, long-term** interests, expertise, and patterns without being cluttered by minor details. Prioritize information that reflects established preferences, skills, or goals.
             """
         else:
             prompt = f"""
-            You are creating an insightful, structured memory system for an AI assistant. Your task is to create the initial summary for a set of user conversations.
+            You are creating an insightful, structured memory system for an AI assistant. Your task is to create the initial **highly focused** summary for a set of user conversations.
 
             <<<CONVERSATIONS>>>
             {batch_content}
@@ -432,17 +433,18 @@ class RollingSummaryProcessor:
 
             Generate a structured summary with these characteristics:
             
-            1. DO NOT include any of the prompt markers (like "CONVERSATIONS" or "END_CONVERSATIONS") in your response
-            2. DO NOT preface your response with phrases like "Here's the summary" or "Summary:"
-            3. Focus on identifying KEY INSIGHTS and PATTERNS, not detailed recaps of every conversation
-            4. Begin with a "CORE INTERESTS" section listing 3-7 main areas of interest shown across conversations
-            5. Group information by THEMES (technical subjects, creative projects, personal interests) 
-            6. For each theme, provide bullet points of relevant insights, preferences, and expertise
-            7. Add a "TECHNICAL EXPERTISE" section identifying areas where the user has demonstrated knowledge
-            8. Include a "RECURRING TOPICS" section for subjects that appear multiple times
-            9. For important timestamps (project deadlines, significant events), use the format YYYY-MM-DD
+            1. DO NOT include any of the prompt markers (like "CONVERSATIONS" or "END_CONVERSATIONS") in your response.
+            2. DO NOT preface your response with phrases like "Here's the summary" or "Summary:".
+            3. Focus **strictly** on identifying **significant, recurring KEY INSIGHTS and PATTERNS**. Avoid detailed recaps or isolated facts from individual conversations.
+            4. Begin with a "CORE INTERESTS" section listing 3-7 main areas of interest demonstrated **repeatedly** across conversations.
+            5. Group information by **major THEMES** (technical subjects, creative projects, personal interests).
+            6. For each theme, provide **concise** bullet points highlighting **only the most relevant and enduring** insights, preferences, and expertise. **Exclude trivial details:** one-off mentions, minor examples, specific commands/tools used infrequently unless they illustrate a core skill or recurring pattern.
+            7. Add a "TECHNICAL EXPERTISE" section identifying areas where the user has **consistently** demonstrated knowledge or significant experience.
+            8. Include a "RECURRING TOPICS" section for subjects that appear **multiple times with substance**.
+            9. For important timestamps (project deadlines, significant events), use the format YYYY-MM-DD.
+            10. **DO NOT create exhaustive lists.** For example, instead of listing every Linux command mentioned, summarize the user's proficiency in Linux command-line usage. Instead of listing every song mentioned for image generation, summarize the interest in generating images for song lyrics, perhaps noting a few key examples if they represent a broader style or theme.
 
-            The summary should be immediately useful for an AI to understand this user's core interests, expertise, and patterns without needing to process all historical conversations again.
+            The summary should be immediately useful for an AI to understand this user's **core, long-term** interests, expertise, and patterns without being cluttered by minor details. Prioritize information that reflects established preferences, skills, or goals.
             """
         
         print(f"Generating summary for batch with {batch_content.count('CONVERSATION:')} conversations...")
