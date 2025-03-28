@@ -102,7 +102,7 @@ class GeminiClient:
                  ["429", "resource exhausted", "quota", "rate limit"])
     
     @retry(
-        retry=retry_if_exception_type((genai.types.BlockedPromptException, genai.types.InternalServerError)),
+        retry=retry_if_exception_type(Exception),  # retry on any exception
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING)
@@ -213,7 +213,7 @@ class GeminiClient:
                 return [0.0] * 768  # Return zero embedding
     
     @retry(
-        retry=retry_if_exception_type((genai.types.BlockedPromptException, genai.types.InternalServerError)),
+        retry=retry_if_exception_type(Exception),  # retry on any exception
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING)

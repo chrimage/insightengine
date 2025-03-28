@@ -100,7 +100,7 @@ def view_conversation_summary(db_path, conv_id):
             print_summary_details(summary)
 
             # Check if we have conversation information
-            c = db.conn.cursor()
+            c = db.sqlite_conn.cursor()
             c.execute('SELECT title, timestamp FROM conversations WHERE id = ?', (summary['conversation_id'],))
             conv_data = c.fetchone()
 
@@ -112,7 +112,7 @@ def view_conversation_summary(db_path, conv_id):
             print('No summary found for this conversation.')
 
             # Check if conversation exists
-            c = db.conn.cursor()
+            c = db.sqlite_conn.cursor()
             c.execute('SELECT id, title FROM conversations WHERE id = ?', (conv_id,))
             conv = c.fetchone()
 
@@ -195,7 +195,7 @@ def list_conversations_without_summaries(db_path):
     db = None
     try:
         db = MemoryDatabase(db_path)
-        c = db.conn.cursor()
+        c = db.sqlite_conn.cursor()
 
         # Get conversations without summaries
         c.execute('''
@@ -261,9 +261,9 @@ def run_main_summarization(args):
         db = MemoryDatabase(args.db)
 
         # Count stats before processing
-        conv_count_before = db.conn.execute("SELECT COUNT(*) FROM conversations;").fetchone()[0]
-        msg_count_before = db.conn.execute("SELECT COUNT(*) FROM messages;").fetchone()[0]
-        summary_count_before = db.conn.execute("SELECT COUNT(*) FROM rolling_summaries;").fetchone()[0]
+        conv_count_before = db.sqlite_conn.execute("SELECT COUNT(*) FROM conversations;").fetchone()[0]
+        msg_count_before = db.sqlite_conn.execute("SELECT COUNT(*) FROM messages;").fetchone()[0]
+        summary_count_before = db.sqlite_conn.execute("SELECT COUNT(*) FROM rolling_summaries;").fetchone()[0]
 
         if args.verbose:
             print("Settings:")
@@ -287,11 +287,11 @@ def run_main_summarization(args):
         # --- Rebuild Logic ---
         if args.rebuild:
             print('Rebuilding summaries: deleting all existing summaries...')
-            db.conn.execute('DELETE FROM rolling_summaries')
-            c = db.conn.cursor()
+            db.sqlite_conn.execute('DELETE FROM rolling_summaries')
+            c = db.sqlite_conn.cursor()
             c.execute('UPDATE conversations SET summary = NULL, metadata = NULL')
             c.execute('DELETE FROM embeddings WHERE id LIKE "summary_%"')
-            db.conn.commit()
+            db.sqlite_conn.commit()
             print('All existing summaries deleted. Starting fresh.')
 
         gemini = GeminiClient()
@@ -319,7 +319,7 @@ def run_main_summarization(args):
                 print('Global summary processing completed successfully!')
 
                 # Always check and process conversation summaries for new batches after global run
-                unsummarized_count = db.conn.execute(
+                unsummarized_count = db.sqlite_conn.execute(
                     'SELECT COUNT(*) FROM conversations WHERE summary IS NULL OR summary = ""'
                 ).fetchone()[0]
 
@@ -351,7 +351,7 @@ def run_main_summarization(args):
                 traceback.print_exc()
 
         # --- Final Stats ---
-        cur = db.conn.cursor()
+        cur = db.sqlite_conn.cursor()
         cur.execute('SELECT COUNT(*) FROM rolling_summaries')
         global_count_after = cur.fetchone()[0]
         cur.execute('SELECT COUNT(*) FROM conversations WHERE summary IS NOT NULL AND summary != ""')

@@ -56,7 +56,7 @@ class OpenAIParser:
             title=title,
             messages=messages,
             model=model,
-            timestamp=timestamp
+            timestamp=timestamp.timestamp() if isinstance(timestamp, datetime) else timestamp
         )
     
     def _extract_conversation_thread(self, conversation: Dict[str, Any]) -> List[Message]:
@@ -65,6 +65,9 @@ class OpenAIParser:
         mapping = conversation.get('mapping', {})
         if not mapping:
             return []
+        
+        # Get conversation ID
+        conv_id = conversation.get('id', str(uuid.uuid4()))
         
         # Start from the current node
         current_node_id = conversation.get('current_node')
@@ -109,7 +112,11 @@ class OpenAIParser:
                 
                 # Extract role
                 author = message.get('author', {})
-                role = author.get('role', 'unknown') if author else 'unknown'
+                role = author.get('role', 'system') if author else 'system'
+                
+                # Map any non-standard roles to system
+                if role not in ['user', 'assistant', 'system']:
+                    role = 'system'
                 
                 # Extract content - handle different content types
                 content = ''
@@ -144,7 +151,12 @@ class OpenAIParser:
                 
                 # Create message object
                 if content:  # Only add non-empty messages
-                    thread.append(Message(role=role, content=content, timestamp=msg_timestamp))
+                    thread.append(Message(
+                        role=role, 
+                        content=content, 
+                        timestamp=msg_timestamp.timestamp() if msg_timestamp else datetime.now().timestamp(),
+                        conversation_id=conv_id
+                    ))
             
             # Process children in order
             for child_id in node.get('children', []):

@@ -6,7 +6,7 @@ import json
 from tqdm import tqdm
 import uuid
 from datetime import datetime
-from memory_ai.core.database import MemoryDatabase
+from memory_ai.core.database import MemoryDatabase, ConversationORM, MessageORM
 from memory_ai.memory.parser import OpenAIParser
 from memory_ai.utils.gemini import GeminiClient
 
@@ -75,38 +75,39 @@ def index_conversations(input_dir, db_path, max_conversations=None):
 
 def store_conversation(db, conversation, gemini):
     """Store a conversation and its embeddings in the database."""
-    c = db.conn.cursor()
-    
-    # Store conversation
-    c.execute('''
-    INSERT OR REPLACE INTO conversations
-    (id, title, timestamp, model, message_count, summary, quality_score, token_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        conversation.id,
-        conversation.title,
-        conversation.timestamp.timestamp() if conversation.timestamp else datetime.now().timestamp(),
-        conversation.model,
-        len(conversation.messages),
-        "",  # Summary will be generated later
-        None,  # Quality score to be determined
-        0  # Token count to be calculated
-    ))
-    
-    # Store messages
-    for message in conversation.messages:
-        message_id = str(uuid.uuid4())
-        c.execute('''
-        INSERT OR REPLACE INTO messages
-        (id, conversation_id, role, content, timestamp)
-        VALUES (?, ?, ?, ?, ?)
-        ''', (
-            message_id,
-            conversation.id,
-            message.role,
-            message.content,
-            message.timestamp.timestamp() if message.timestamp else datetime.now().timestamp()
-        ))
+    # Store conversation using SQLAlchemy sessionmaker
+    with db.manager.session() as session:
+        # Create conversation ORM object
+        conv_orm = ConversationORM(
+            id=conversation.id,
+            title=conversation.title,
+            timestamp=conversation.timestamp,
+            model=conversation.model or "unknown",
+            message_count=len(conversation.messages),
+            summary="",  # Summary will be generated later
+            quality_score=None,  # Quality score to be determined
+            token_count=0,  # Token count to be calculated
+            metadata_json="{}"
+        )
+        
+        # Add conversation to session
+        session.merge(conv_orm)
+        
+        # Store messages
+        for message in conversation.messages:
+            message_id = str(uuid.uuid4())
+            msg_orm = MessageORM(
+                id=message_id,
+                conversation_id=conversation.id,
+                role=message.role,
+                content=message.content,
+                timestamp=message.timestamp,
+                metadata_json="{}"
+            )
+            session.merge(msg_orm)
+        
+        # Commit to store conversation and messages
+        session.commit()
     
     # Generate and store embedding
     try:
@@ -121,8 +122,6 @@ def store_conversation(db, conversation, gemini):
         
     except Exception as e:
         print(f"Error generating embedding for conversation {conversation.id}: {e}")
-    
-    db.conn.commit()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Index conversations for the memory system")

@@ -82,7 +82,7 @@ class RollingSummaryProcessor:
             embedding = None
             if self.generate_embeddings:
                 try:
-                    embedding = self.gemini_client.generate_embedding(new_summary)
+                    embedding = self.gemini_client.generate_embeddings(new_summary)
                 except Exception as e:
                     print(f"Error generating embedding for rolling summary: {e}")
             
@@ -139,7 +139,7 @@ class RollingSummaryProcessor:
                 # Only process if it doesn't already have a summary
                 try:
                     conv_has_summary = False
-                    with self.db.conn as conn:
+                    with self.db.sqlite_conn as conn:
                         c = conn.cursor()
                         c.execute("SELECT 1 FROM conversations WHERE id = ? AND summary IS NOT NULL AND summary != ''", 
                                 (conv['id'],))
@@ -175,7 +175,7 @@ class RollingSummaryProcessor:
             content += f"Date: {datetime.fromtimestamp(conv['timestamp']).strftime('%Y-%m-%d')}\n\n"
             
             # Get a sample of messages from this conversation
-            with self.db.conn as conn:
+            with self.db.sqlite_conn as conn:
                 c = conn.cursor()
                 c.execute('''
                 SELECT role, content FROM messages
@@ -280,7 +280,7 @@ class RollingSummaryProcessor:
     
     def _get_chronological_conversations(self):
         """Get all conversations ordered by timestamp."""
-        c = self.db.conn.cursor()
+        c = self.db.sqlite_conn.cursor()
         c.execute('''
         SELECT id, title, timestamp, model, message_count, summary, quality_score
         FROM conversations
@@ -298,7 +298,7 @@ class RollingSummaryProcessor:
             formatted_content += f"Date: {datetime.fromtimestamp(conv['timestamp']).strftime('%Y-%m-%d')}\n"
             
             # Get messages for this conversation
-            c = self.db.conn.cursor()
+            c = self.db.sqlite_conn.cursor()
             c.execute('''
             SELECT role, content FROM messages
             WHERE conversation_id = ?
@@ -323,14 +323,16 @@ class RollingSummaryProcessor:
             print("Embedding generation is disabled")
             return (0, 0)
             
-        c = self.db.conn.cursor()
+        c = self.db.sqlite_conn.cursor()
         processed_global = 0
         processed_conversation = 0
         
         # Process global rolling summaries first
         c.execute('''
-        SELECT id, summary_text FROM rolling_summaries
-        WHERE embedding IS NULL
+        SELECT rs.id, rs.summary_text 
+        FROM rolling_summaries rs
+        LEFT JOIN embeddings e ON e.source_id = rs.id
+        WHERE e.id IS NULL
         ''')
         
         global_summaries = c.fetchall()
@@ -343,16 +345,16 @@ class RollingSummaryProcessor:
                 
                 try:
                     # Generate and store embedding
-                    embedding = self.gemini_client.generate_embedding(summary_text)
+                    embedding = self.gemini_client.generate_embeddings(summary_text)
                     
                     # Update the summary with the embedding
                     c.execute('''
                     UPDATE rolling_summaries
                     SET embedding = ?
                     WHERE id = ?
-                    ''', (sqlite_vec.serialize_float32(embedding), summary_id))
+                    ''', (np.array(embedding, dtype=np.float32).tobytes(), summary_id))
                     
-                    self.db.conn.commit()
+                    self.db.sqlite_conn.commit()
                     processed_global += 1
                     print(f"Generated embedding for global summary {summary_id}")
                     
@@ -363,7 +365,7 @@ class RollingSummaryProcessor:
         c.execute('''
         SELECT c.id, c.summary FROM conversations c
         LEFT JOIN embeddings e ON e.id = 'summary_' || c.id
-        WHERE c.summary IS NOT NULL AND e.embedding IS NULL
+        WHERE c.summary IS NOT NULL AND e.id IS NULL
         ''')
         
         conversation_summaries = c.fetchall()
@@ -376,7 +378,7 @@ class RollingSummaryProcessor:
                 
                 try:
                     # Generate and store embedding
-                    embedding = self.gemini_client.generate_embedding(summary_text)
+                    embedding = self.gemini_client.generate_embeddings(summary_text)
                     
                     # Store in the embeddings table
                     embedding_id = f"summary_{conversation_id}"
@@ -451,19 +453,19 @@ class RollingSummaryProcessor:
         
         try:
             # Generate summary with Gemini
-            response = self.gemini_client.generate_content(
+            response = self.gemini_client.generate_text(
                 prompt=prompt,
-                max_output_tokens=self.max_tokens,
+                max_tokens=self.max_tokens,
                 temperature=0.1  # Reduced temperature for more consistent formatting
             )
             
-            # If response is None or doesn't have text attribute
-            if not response or not hasattr(response, 'text'):
+            # If response is None
+            if not response:
                 print(f"WARNING: Invalid response from Gemini API: {response}")
                 raise ValueError("Invalid response from Gemini API")
             
             # Process the response to ensure it's properly formatted
-            summary_text = response.text.strip()
+            summary_text = response.strip()
             
             # Remove any lingering prompt artifacts that might have been included
             for marker in ["<<<PREVIOUS_SUMMARY>>>", "<<<END_PREVIOUS_SUMMARY>>>", 
@@ -504,7 +506,7 @@ class RollingSummaryProcessor:
         Returns:
             int: Number of summaries generated
         """
-        with self.db.conn as conn:
+        with self.db.sqlite_conn as conn:
             c = conn.cursor()
             
             # Find conversations without summaries
@@ -562,7 +564,7 @@ class RollingSummaryProcessor:
         conversation_id = conversation['id']
         
         # Get messages for this conversation using a with statement to ensure proper cleanup
-        with self.db.conn as conn:
+        with self.db.sqlite_conn as conn:
             c = conn.cursor()
             c.execute('''
             SELECT role, content FROM messages
@@ -617,16 +619,16 @@ class RollingSummaryProcessor:
         
         try:
             # Generate summary with Gemini
-            response = self.gemini_client.generate_content(
+            response = self.gemini_client.generate_text(
                 prompt=prompt,
-                max_output_tokens=4096,
+                max_tokens=4096,
                 temperature=0.1  # Low temperature for consistency
             )
             
             # Extract and validate JSON
             try:
                 # Clean up the response to extract only the JSON part
-                summary_text = response.text.strip()
+                summary_text = response.strip()
                 
                 # Extract JSON if it's enclosed in backticks
                 if "```json" in summary_text and "```" in summary_text:
@@ -648,7 +650,7 @@ class RollingSummaryProcessor:
                     try:
                         # Get embedding for the complete JSON to enable semantic search
                         full_text = json.dumps(summary_data)
-                        embedding = self.gemini_client.generate_embedding(full_text)
+                        embedding = self.gemini_client.generate_embeddings(full_text)
                     except Exception as e:
                         print(f"Error generating embedding for conversation summary: {e}")
                 
@@ -677,7 +679,7 @@ class RollingSummaryProcessor:
             except json.JSONDecodeError:
                 # Fallback for non-JSON output
                 print(f"Failed to parse JSON for conversation {conversation_id}, using plain text")
-                summary_text = response.text.strip()
+                summary_text = response.strip()
                 
                 return self.db.store_conversation_summary(
                     conversation_id=conversation_id,
@@ -716,9 +718,9 @@ class RollingSummaryProcessor:
         Provide a complete, updated summary that replaces the previous one.
         """
         
-        response = self.gemini_client.generate_content(
+        response = self.gemini_client.generate_text(
             prompt=prompt,
-            max_output_tokens=self.max_tokens,
+            max_tokens=self.max_tokens,
             temperature=0.2
         )
         
@@ -729,14 +731,14 @@ class RollingSummaryProcessor:
         embedding = None
         if self.generate_embeddings:
             try:
-                embedding = self.gemini_client.generate_embedding(response.text)
+                embedding = self.gemini_client.generate_embeddings(response)
             except Exception as e:
                 print(f"Error generating embedding for forgotten summary: {e}")
         
         summary_data = {
             'id': summary_id,
             'timestamp': datetime.now().timestamp(),
-            'summary_text': response.text,
+            'summary_text': response,
             'conversation_range': latest_summary['conversation_range'],
             'version': latest_summary['version'] + 1,
             'embedding': embedding,
@@ -744,9 +746,9 @@ class RollingSummaryProcessor:
             'metadata': {
                 'forgotten_from': latest_summary.get('id'),
                 'days_threshold': days_threshold,
-                'themes': self._extract_themes_and_topics(response.text)[0],
-                'topics': self._extract_themes_and_topics(response.text)[1],
-                'quality_score': self._calculate_summary_quality(response.text)
+                'themes': self._extract_themes_and_topics(response)[0],
+                'topics': self._extract_themes_and_topics(response)[1],
+                'quality_score': self._calculate_summary_quality(response)
             }
         }
         

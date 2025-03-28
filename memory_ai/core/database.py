@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union, Generic, TypeVar
 
+import json
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text, Column, String, Float, Integer, Boolean, ForeignKey, MetaData, Table
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session, Mapped, mapped_column
@@ -606,3 +607,194 @@ def get_db_manager() -> DatabaseManager:
         DatabaseManager: The database manager
     """
     return db_manager
+
+
+class MemoryDatabase:
+    """Legacy adapter class for the indexer tool.
+    
+    This class provides a compatibility layer for code that was written
+    for the older database API, allowing it to work with the new repository
+    pattern implementation.
+    """
+    
+    def __init__(self, db_path: str):
+        """Initialize the memory database.
+        
+        Args:
+            db_path: Path to the SQLite database file
+        """
+        self.db_path = db_path
+        self.manager = DatabaseManager()
+        self.engine = self.manager.engine
+        self.conn = self.engine
+
+        # For direct SQL queries - use SQLite connection for legacy code
+        import sqlite3
+        self.sqlite_conn = sqlite3.connect(db_path)
+        self.sqlite_conn.row_factory = sqlite3.Row
+        
+    def store_embedding(self, source_id: str, vector: List[float], source_type: str = "conversation", model: str = "gemini-embedding") -> None:
+        """Store an embedding in the database.
+        
+        Args:
+            source_id: ID of the source (conversation, chunk, etc.)
+            vector: Embedding vector
+            source_type: Type of the source (defaults to "conversation")
+            model: Name of the embedding model (defaults to "gemini-embedding")
+        """
+        # Convert source_type string to enum
+        try:
+            source_type_enum = SourceType(source_type)
+        except ValueError:
+            source_type_enum = SourceType.CONVERSATION_SUMMARY
+            
+        with self.manager.session() as session:
+            # Convert vector to binary for storage
+            import numpy as np
+            import uuid as uuid_module  # Import uuid to avoid name collision
+            vector_blob = np.array(vector, dtype=np.float32).tobytes()
+            
+            # Create embedding ORM object
+            embedding = EmbeddingORM(
+                id=f"emb_{uuid_module.uuid4()}",
+                source_id=source_id,
+                vector_blob=vector_blob,
+                model=model,
+                dimensions=len(vector),
+                source_type=source_type_enum.value
+            )
+            
+            session.add(embedding)
+    
+    # Legacy methods for the summarization tool
+    def get_active_summary(self):
+        """Get the active global summary."""
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute("""
+            SELECT * FROM rolling_summaries
+            ORDER BY version DESC, timestamp DESC
+            LIMIT 1
+        """)
+        summary = cursor.fetchone()
+        if summary:
+            return dict(summary)
+        return None
+    
+    def get_conversation_summary(self, conv_id):
+        """Get the summary for a specific conversation."""
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute("""
+            SELECT id as conversation_id, summary as summary_text, metadata_json as metadata
+            FROM conversations
+            WHERE id = ?
+        """, (conv_id,))
+        summary = cursor.fetchone()
+        if summary and summary['summary_text']:
+            return dict(summary)
+        return None
+    
+    def get_summaries_by_theme(self, query, embedding=None):
+        """Search for summaries by theme."""
+        # This is a simplified version - in reality would use vector search
+        cursor = self.sqlite_conn.cursor()
+        # Get conversation summaries containing the query
+        query_param = f"%{query}%"
+        cursor.execute("""
+            SELECT id as conversation_id, title, summary as summary_text, metadata_json as metadata, timestamp
+            FROM conversations
+            WHERE summary LIKE ? OR metadata_json LIKE ?
+            ORDER BY timestamp DESC
+            LIMIT 10
+        """, (query_param, query_param))
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def store_conversation_summary(self, conversation_id, summary_text, metadata=None, embedding=None):
+        """Store a summary for a specific conversation."""
+        cursor = self.sqlite_conn.cursor()
+        
+        # Convert metadata to JSON if it's a dictionary
+        if isinstance(metadata, dict):
+            metadata_json = json.dumps(metadata)
+        else:
+            metadata_json = "{}"
+            
+        # Update the conversation with the summary
+        cursor.execute("""
+            UPDATE conversations
+            SET summary = ?, metadata_json = ?
+            WHERE id = ?
+        """, (summary_text, metadata_json, conversation_id))
+        
+        # Store the embedding if provided
+        if embedding is not None:
+            import numpy as np
+            import uuid as uuid_module
+            embedding_id = f"summary_{conversation_id}"
+            
+            # Store in embeddings table
+            cursor.execute("""
+                INSERT OR REPLACE INTO embeddings
+                (id, source_id, vector_blob, model, dimensions, source_type)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                embedding_id,
+                conversation_id,
+                np.array(embedding, dtype=np.float32).tobytes(),
+                "summary-embedding",
+                len(embedding),
+                "conv_summary"
+            ))
+        
+        self.sqlite_conn.commit()
+        return True
+    
+    def store_rolling_summary(self, summary_data):
+        """Store a rolling summary."""
+        cursor = self.sqlite_conn.cursor()
+        
+        # Extract data from the summary
+        summary_id = summary_data['id']
+        timestamp = summary_data['timestamp']
+        summary_text = summary_data['summary_text']
+        conversation_range = json.dumps(summary_data['conversation_range'])
+        version = summary_data.get('version', 1)
+        metadata = summary_data.get('metadata', {})
+        
+        if isinstance(metadata, dict):
+            metadata_json = json.dumps(metadata)
+        else:
+            metadata_json = "{}"
+        
+        # Store the summary
+        cursor.execute("""
+            INSERT INTO rolling_summaries
+            (id, timestamp, summary_text, conversation_range, version, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (summary_id, timestamp, summary_text, conversation_range, version, metadata_json))
+        
+        # Store the embedding if provided
+        embedding = summary_data.get('embedding')
+        if embedding is not None:
+            import numpy as np
+            
+            # Store in embeddings table
+            cursor.execute("""
+                INSERT OR REPLACE INTO embeddings
+                (id, source_id, vector_blob, model, dimensions, source_type)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                f"rolling_{summary_id}",
+                summary_id,
+                np.array(embedding, dtype=np.float32).tobytes(),
+                "summary-embedding",
+                len(embedding),
+                "rolling_summary"
+            ))
+        
+        self.sqlite_conn.commit()
+        return True
+            
+    def close(self) -> None:
+        """Close the database connection."""
+        if hasattr(self, 'sqlite_conn') and self.sqlite_conn:
+            self.sqlite_conn.close()

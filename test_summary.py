@@ -17,25 +17,24 @@ db_path = "memory.db"
 print(f"Using database: {db_path}")
 
 db = MemoryDatabase(db_path)
-gemini = GeminiClient(use_dummy_embeddings=True)
+gemini = GeminiClient()  # Use default constructor
 processor = RollingSummaryProcessor(db, gemini, batch_size=3)
 
 # Get conversation count
-with db.conn as conn:
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM conversations")
-    count = c.fetchone()[0]
-    print(f"Found {count} conversations in database")
+cursor = db.sqlite_conn.cursor()
+cursor.execute("SELECT COUNT(*) FROM conversations")
+count = cursor.fetchone()[0]
+print(f"Found {count} conversations in database")
 
-    # Get unsummarized conversation count
-    c.execute("SELECT COUNT(*) FROM conversations WHERE summary IS NULL OR summary = ''")
-    unsummarized = c.fetchone()[0]
-    print(f"Found {unsummarized} conversations without summaries")
+# Get unsummarized conversation count
+cursor.execute("SELECT COUNT(*) FROM conversations WHERE summary IS NULL OR summary = ''")
+unsummarized = cursor.fetchone()[0]
+print(f"Found {unsummarized} conversations without summaries")
 
-    # Get rolling summary count
-    c.execute("SELECT COUNT(*) FROM rolling_summaries")
-    summary_count = c.fetchone()[0]
-    print(f"Found {summary_count} rolling summaries")
+# Get rolling summary count
+cursor.execute("SELECT COUNT(*) FROM rolling_summaries")
+summary_count = cursor.fetchone()[0]
+print(f"Found {summary_count} rolling summaries")
 
 # Process a limited number of conversations
 limit = 5
@@ -47,10 +46,9 @@ processed = processor.process_conversation_specific_summaries(limit=limit)
 print(f"Processed {processed} conversation summaries")
 
 # Check conversation summaries
-with db.conn as conn:
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM conversations WHERE summary IS NOT NULL AND summary != ''")
-    summarized = c.fetchone()[0]
-    print(f"Database now has {summarized} conversation-specific summaries")
+cursor = db.sqlite_conn.cursor()
+cursor.execute("SELECT COUNT(*) FROM conversations WHERE summary IS NOT NULL AND summary != ''")
+summarized = cursor.fetchone()[0]
+print(f"Database now has {summarized} conversation-specific summaries")
 
 print("Test complete!")
