@@ -1,167 +1,106 @@
-# InsightEngine: TODO List
+# InsightEngine: Rebuild Plan
 
-Based on the system architecture outlined in INIT.md and the vision in VISION.md, this document lists the components and features that still need to be implemented or improved.
+This document outlines our complete rebuild strategy for the InsightEngine project, focusing on creating a robust, maintainable system that fulfills the original vision with proper software engineering practices.
 
-## Core Implementation
+## Phase 1: Foundation
 
-### Memory Quality Assessment
-- [x] Complete the implementation of `memory/quality.py`
-  - [x] Implement `_calculate_info_density` function using:
-    - [x] Unique word ratio calculation
-    - [x] Named entity density analysis
-    - [x] Information content metrics
-    - [x] Shannon entropy measurement
-  - [x] Implement `_calculate_coherence` function using:
-    - [x] Sentence flow analysis
-    - [x] Topic consistency evaluation
-    - [x] Transition quality assessment
-    - [x] Conversation structure analysis
-  - [x] Implement `_calculate_specificity` function using:
-    - [x] Concrete vs. abstract word analysis
-    - [x] Detail density measurement
-    - [x] Quantitative information detection
-    - [x] Example detection
-  - [x] Implement `_estimate_factuality` function using:
-    - [x] Pattern matching for factual statements
-    - [x] Confidence language analysis
-    - [x] Balanced perspective evaluation
-    - [x] Source attribution detection
-  - [x] Add LLM-based quality evaluation
-  - [x] Implement feedback mechanism for quality score refinement
+### Domain Model
+- [ ] Define proper domain entities with validation
+- [ ] Create value objects for core concepts
+- [ ] Design aggregate roots and boundaries
+- [ ] Implement domain events for key state changes
 
-### Self-Reflection System
-- [x] Complete the implementation of `reflection/evaluator.py`
-  - [x] Implement structured evaluation framework
-  - [x] Add JSON-based response format for consistent parsing
-  - [x] Create asynchronous evaluation pipeline
-  - [x] Add success metrics tracking
-  - [x] Implement meta-evaluation system
-  - [x] Add fallback for unstructured evaluation
-- [x] Complete the implementation of `reflection/insights.py`
-  - [x] Implement vector-based insight retrieval (replace keyword matching)
-  - [x] Create insight extraction with structured output
-  - [x] Improve insight categorization system
-  - [x] Build feedback loop for insight application success
-  - [x] Add insight consolidation mechanism
-  - [x] Implement insight metrics and analytics
+### Database Architecture
+- [ ] Implement SQLAlchemy ORM layer
+- [ ] Set up Alembic for database migrations
+- [ ] Design proper schema with relationships
+- [ ] Create repository interfaces and implementations
+- [ ] Implement unit of work pattern for transactions
 
-### Summary Enhancement
-- [ ] Improve `memory/summary.py`
-  - [ ] Enhance summary prompts for better structured output
-  - [ ] Implement JSON output request for metadata
-  - [ ] Add dedicated metadata extraction function
-  - [ ] Implement post-processing to clean up LLM responses
-  - [ ] Add configurable quality filtering thresholds
+### Vector Storage
+- [ ] Evaluate vector database options (FAISS, Chroma, etc.)
+- [ ] Create abstraction layer for vector operations
+- [ ] Implement proper indexing and search strategies
+- [ ] Add support for hybrid search (keywords + vectors)
+
+## Phase 2: Core Services
+
+### Memory Management
+- [ ] Implement chunking service with proper overlap
+- [ ] Create token budget management system
+- [ ] Design document processor pipeline
+- [ ] Build memory quality assessment service
+- [ ] Implement forgetting mechanism with time decay
 
 ### Context Assembly
-- [ ] Enhance `memory/context.py`
-  - [ ] Implement adaptive token budgeting
-  - [ ] Create weighted retrieval combining similarity and quality scores
-  - [ ] Add metadata-based filtering for theme/topic relevance
-  - [ ] Implement context assembly visualization
+- [ ] Design weighted retrieval algorithm
+- [ ] Implement adaptive context building
+- [ ] Create context visualization system
+- [ ] Add metadata filtering capabilities
+- [ ] Build theme-based grouping system
 
-## Technical Improvements
+### LLM Integration
+- [ ] Create provider-agnostic LLM interface
+- [ ] Implement robust error handling and retries
+- [ ] Add streaming support for all operations
+- [ ] Build proper prompt template system
+- [ ] Implement JSON mode for structured outputs
 
-### Shell Script Refactoring
-- [ ] Create common setup script (`_setup.sh`)
-  - [ ] Move shared functionality (venv activation, env vars)
-  - [ ] Add environment validation
-- [ ] Migrate embedded Python to proper modules
-  - [ ] Move summary viewing logic to dedicated Python module
-  - [ ] Move theme search to dedicated Python function
-- [ ] Improve error handling in all scripts
+## Phase 3: Advanced Features
 
-### Database Enhancements
-- [ ] Improve database operations
-  - [ ] Implement vector similarity for theme searching
-  - [ ] Add transaction wrapping for multi-operation writes
-  - [ ] Consider adding SQLite FTS5 for full-text search
-  - [ ] Ensure consistent handling of metadata fields
+### Self-Reflection System
+- [ ] Design evaluation framework for responses
+- [ ] Implement insight extraction and storage
+- [ ] Create feedback loop for continuous improvement
+- [ ] Build analysis pipeline for system performance
+- [ ] Implement insight application mechanism
+
+### Summary Generation
+- [ ] Design incremental summary system
+- [ ] Implement hierarchical summarization
+- [ ] Create topic extraction and classification
+- [ ] Build narrative understanding framework
+- [ ] Add metadata enrichment for summaries
+
+## Phase 4: Application Layer
+
+### Chat Framework
+- [ ] Create modular chat engine
+- [ ] Implement session management
+- [ ] Build persona and preference system
+- [ ] Add multi-turn conversation handling
+- [ ] Implement streaming responses
+
+### CLI Tools
+- [ ] Design composable command architecture
+- [ ] Implement progress visualization
+- [ ] Create data import/export utilities
+- [ ] Build interactive debug tools
+- [ ] Add analytic reporting commands
+
+### Web Interface
+- [ ] Create FastAPI-based backend
+- [ ] Implement simple React frontend
+- [ ] Add visualization for context assembly
+- [ ] Build conversation explorer
+- [ ] Implement user management
+
+## Phase 5: Testing & Quality
 
 ### Testing Framework
-- [ ] Create comprehensive testing system
-  - [ ] Implement unit tests for core components
-  - [ ] Create integration tests for end-to-end flows
-  - [ ] Set up mocking for LLM calls
-  - [ ] Establish benchmark tests vs. traditional RAG
+- [ ] Set up pytest with fixtures
+- [ ] Implement LLM response mocking
+- [ ] Create integration test suite
+- [ ] Build performance benchmarking
+- [ ] Add comprehensive test coverage
 
-## Chat Agent
+### Quality Assurance
+- [ ] Set up CI/CD pipeline
+- [ ] Implement static code analysis
+- [ ] Add type checking with mypy
+- [ ] Create documentation generation
+- [ ] Build systematic error reporting
 
-- [ ] Develop `chat/agent.py`
-  - [ ] Implement full context assembly
-  - [ ] Create main chat loop
-  - [ ] Add feedback mechanism for memory quality updates
-  - [ ] Implement adaptive temperature setting
-  - [ ] Add streaming response support
+## Getting Started
 
-- [ ] Enhance `chat/prompts.py` 
-  - [ ] Design prompt templates for different scenarios
-  - [ ] Create system prompts that use the memory effectively
-  - [ ] Implement configurable prompt templates
-
-## Command-Line Tools
-
-- [ ] Improve `tools/index.py`
-  - [ ] Add progress reporting
-  - [ ] Implement error handling for malformed conversations
-  - [ ] Add support for incremental indexing
-
-- [ ] Enhance `tools/summarize.py`
-  - [ ] Move viewing logic from shell script to Python
-  - [ ] Add proper theme-based summary retrieval (vector-based)
-  - [ ] Implement visualization of rolling summary evolution
-
-- [ ] Develop `tools/interact.py`
-  - [ ] Create improved interactive chat interface
-  - [ ] Implement special commands (save, clear, etc.)
-  - [ ] Add context visualization option
-
-## Utilities
-
-- [ ] Enhance `utils/gemini.py`
-  - [x] Implement robust error handling
-  - [x] Add request rate limiting and retries
-  - [ ] Implement streaming responses
-  - [ ] Add asynchronous operation support
-  - [ ] Improve chunking strategies for long texts
-
-- [ ] Implement `utils/tokens.py`
-  - [ ] Add token counting utilities
-  - [ ] Implement token budget management
-  - [ ] Create adaptive context sizing
-
-## Configuration and Documentation
-
-- [ ] Enhance configuration system
-  - [x] Support .env file for all settings
-  - [ ] Consider using Pydantic for validation
-  - [ ] Add more detailed configuration docs
-  - [ ] Implement configuration validation
-
-- [ ] Improve inline documentation
-  - [ ] Add design rationale comments
-  - [ ] Document complex algorithms
-  - [ ] Create architecture diagrams
-  - [ ] Keep README, VISION, and code in sync
-
-## Extensions (Future Work)
-
-- [ ] Build web interface
-  - [ ] Create a simple web UI using Flask or FastAPI
-  - [ ] Implement WebSocket for streaming responses
-  - [ ] Add visualization dashboard
-
-- [ ] Implement scheduled maintenance
-  - [ ] Set up cron jobs to periodically refresh summaries
-  - [ ] Apply forgetting mechanism periodically
-  - [ ] Add maintenance logging and notifications
-
-- [ ] Add multi-user support
-  - [ ] Extend database to handle multiple users
-  - [ ] Implement user authentication
-  - [ ] Create user-specific configuration
-
-- [ ] Implement feedback collection system
-  - [ ] Track user interactions with responses
-  - [ ] Use feedback to improve memory quality
-  - [ ] Build analytics dashboard for system performance
+To implement this plan, we'll focus on establishing the foundation first (Phase 1) before moving on to later phases. Each component will be built with clean interfaces, proper testing, and documentation.

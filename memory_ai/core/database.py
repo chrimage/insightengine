@@ -1,677 +1,608 @@
-# Database operations with sqlite-vec
+"""
+Database layer with SQLAlchemy ORM and repository pattern.
 
-import sqlite3
-import os
-import sqlite_vec
+This module implements the data access layer for the InsightEngine system.
+It uses SQLAlchemy for ORM and transaction management and provides
+a clean repository interface for each domain entity.
+"""
+
+from contextlib import contextmanager
+from datetime import datetime
 import json
-import numpy as np
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union, Generic, TypeVar
 
-class MemoryDatabase:
-    """Database for storing conversations, embeddings, and summaries."""
+import sqlalchemy as sa
+from sqlalchemy import create_engine, text, Column, String, Float, Integer, Boolean, ForeignKey, MetaData, Table
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session, Mapped, mapped_column
+from sqlalchemy.pool import QueuePool
+from sqlalchemy.ext.declarative import declared_attr
+
+from memory_ai.core.config import get_settings
+from memory_ai.core.models import (
+    Conversation, Message, Chunk, Embedding, RollingSummary, Insight, Evaluation, 
+    SourceType, Role, InsightCategory
+)
+
+# Setup logging
+logger = logging.getLogger(__name__)
+
+# Base class for all ORM models
+Base = declarative_base()
+
+# Type variable for repository generic
+T = TypeVar('T')
+
+
+class ConversationORM(Base):
+    """ORM model for conversations."""
     
-    def __init__(self, db_path):
-        """Initialize the database connection."""
-        if os.path.dirname(db_path):  # Only try to create dirs if there's a dirname
-            os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.db_path = db_path
-        self.conn = self._connect()
-        self._initialize_schema()
+    __tablename__ = "conversations"
     
-    def _connect(self):
-        """Create a connection with sqlite-vec enabled."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        
-        # Enable the sqlite-vec extension
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        
-        return conn
+    id = Column(String, primary_key=True)
+    title = Column(String, nullable=False)
+    timestamp = Column(Float, nullable=False)
+    model = Column(String)
+    message_count = Column(Integer, default=0)
+    summary = Column(String)
+    quality_score = Column(Float)
+    token_count = Column(Integer)
+    metadata_json = Column(String, default="{}")  # JSON string
     
-    def _initialize_schema(self):
-        """Initialize the database schema."""
-        c = self.conn.cursor()
-        
-        # Create tables
-        c.execute('''
-        CREATE TABLE IF NOT EXISTS conversations (
-            id TEXT PRIMARY KEY,
-            title TEXT,
-            timestamp REAL,
-            model TEXT,
-            message_count INTEGER,
-            summary TEXT,
-            quality_score REAL,
-            token_count INTEGER
-        )
-        ''')
-        
-        c.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            conversation_id TEXT,
-            role TEXT,
-            content TEXT,
-            timestamp REAL,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        )
-        ''')
-        
-        c.execute('''
-        CREATE TABLE IF NOT EXISTS embeddings (
-            id TEXT PRIMARY KEY,
-            source_id TEXT,
-            embedding BLOB,  -- Binary vector for sqlite-vec
-            model TEXT,
-            dimensions INTEGER
-        )
-        ''')
-        
-        c.execute('''
-        CREATE TABLE IF NOT EXISTS rolling_summaries (
-            id TEXT PRIMARY KEY,
-            timestamp REAL,
-            summary_text TEXT,
-            conversation_range TEXT,  -- JSON array of conversation IDs
-            version INTEGER
-        )
-        ''')
-        
-        c.execute('''
-        CREATE TABLE IF NOT EXISTS insights (
-            id TEXT PRIMARY KEY,
-            text TEXT,
-            category TEXT,
-            confidence REAL,
-            created_at REAL,
-            updated_at REAL,
-            evidence TEXT,  -- JSON array
-            application_count INTEGER,
-            success_rate REAL,
-            embedding BLOB,  -- Binary vector for vector similarity search
-            applications TEXT  -- JSON array of application history
-        )
-        ''')
-        
-        c.execute('''
-        CREATE TABLE IF NOT EXISTS evaluations (
-            id TEXT PRIMARY KEY,
-            timestamp REAL,
-            query TEXT,
-            evaluation TEXT,  -- JSON object with evaluation data
-            structured BOOLEAN,
-            meta_evaluation TEXT  -- JSON object with meta-evaluation data
-        )
-        ''')
-        
-        # Add metadata column to conversations if it doesn't exist
-        self._add_column_if_not_exists("conversations", "metadata", "TEXT")
-        
-        # Create indices for better performance
-        c.execute('CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_embeddings_source_id ON embeddings(source_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_insights_category ON insights(category)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_evaluations_timestamp ON evaluations(timestamp)')
-        
-        self.conn.commit()
-        
-    def _add_column_if_not_exists(self, table, column, type):
-        """Add a column to a table if it doesn't already exist."""
-        c = self.conn.cursor()
-        c.execute(f"PRAGMA table_info({table})")
-        columns = [info[1] for info in c.fetchall()]
-        
-        if column not in columns:
-            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {type}")
-            self.conn.commit()
+    # Relationships
+    messages = relationship("MessageORM", back_populates="conversation", cascade="all, delete-orphan")
+
+
+class MessageORM(Base):
+    """ORM model for messages."""
     
-    def store_embedding(self, source_id, embedding_array, model="gemini-embedding"):
-        """Store an embedding in sqlite-vec format."""
-        c = self.conn.cursor()
-        
-        # Convert numpy array or list to sqlite-vec format
-        if isinstance(embedding_array, np.ndarray):
-            embedding_bytes = sqlite_vec.serialize_float32(embedding_array.tolist())
-        else:
-            embedding_bytes = sqlite_vec.serialize_float32(embedding_array)
-        
-        embedding_id = f"emb_{source_id}"
-        
-        c.execute('''
-        INSERT OR REPLACE INTO embeddings (id, source_id, embedding, model, dimensions)
-        VALUES (?, ?, ?, ?, ?)
-        ''', (
-            embedding_id,
-            source_id,
-            embedding_bytes,
-            model,
-            len(embedding_array)
-        ))
-        
-        self.conn.commit()
+    __tablename__ = "messages"
     
-    def search_similar(self, query_embedding, top_k=5):
-        """Find similar items using vector similarity search."""
-        c = self.conn.cursor()
-        
-        # Convert query embedding to sqlite-vec format
-        if isinstance(query_embedding, np.ndarray):
-            query_bytes = sqlite_vec.serialize_float32(query_embedding.tolist())
-        else:
-            query_bytes = sqlite_vec.serialize_float32(query_embedding)
-        
-        # Perform cosine similarity search
-        c.execute('''
-        SELECT source_id, vec_distance_cosine(embedding, ?) AS distance
-        FROM embeddings
-        ORDER BY distance ASC
-        LIMIT ?
-        ''', (query_bytes, top_k))
-        
-        # Get results and convert to similarity scores (1 - distance)
-        results = []
-        for row in c.fetchall():
-            results.append({
-                'source_id': row[0],
-                'similarity': 1 - row[1]  # Convert distance to similarity score
-            })
-        
-        return results
+    id = Column(String, primary_key=True)
+    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=False)
+    role = Column(String, nullable=False)
+    content = Column(String, nullable=False)
+    timestamp = Column(Float, nullable=False)
+    metadata_json = Column(String, default="{}")  # JSON string
     
-    def store_rolling_summary(self, summary_data):
-        """Store a rolling summary with metadata and embeddings.
+    # Relationships
+    conversation = relationship("ConversationORM", back_populates="messages")
+
+
+class ChunkORM(Base):
+    """ORM model for chunked content."""
+    
+    __tablename__ = "chunks"
+    
+    id = Column(String, primary_key=True)
+    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=False)
+    message_ids = Column(String)  # JSON array of message IDs
+    content = Column(String, nullable=False)
+    timestamp = Column(Float, nullable=False)
+    metadata_json = Column(String, default="{}")  # JSON string
+    
+    # Relationships
+    conversation = relationship("ConversationORM")
+
+
+class EmbeddingORM(Base):
+    """ORM model for vector embeddings."""
+    
+    __tablename__ = "embeddings"
+    
+    id = Column(String, primary_key=True)
+    source_id = Column(String, nullable=False)
+    vector_blob = Column(sa.LargeBinary)  # Binary serialized vector
+    model = Column(String, nullable=False)
+    dimensions = Column(Integer, nullable=False)
+    source_type = Column(String, nullable=False)
+    vector_id = Column(Integer)  # Reference to external vector store
+
+
+class RollingSummaryORM(Base):
+    """ORM model for rolling summaries."""
+    
+    __tablename__ = "rolling_summaries"
+    
+    id = Column(String, primary_key=True)
+    timestamp = Column(Float, nullable=False)
+    summary_text = Column(String, nullable=False)
+    conversation_range = Column(String)  # JSON array of conversation IDs
+    version = Column(Integer, default=1)
+    metadata_json = Column(String, default="{}")  # JSON string
+
+
+class InsightORM(Base):
+    """ORM model for insights."""
+    
+    __tablename__ = "insights"
+    
+    id = Column(String, primary_key=True)
+    text = Column(String, nullable=False)
+    category = Column(String, nullable=False)
+    confidence = Column(Float, nullable=False)
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
+    evidence = Column(String)  # JSON array
+    application_count = Column(Integer, default=0)
+    success_rate = Column(Float)
+    applications = Column(String)  # JSON array
+    metadata_json = Column(String, default="{}")  # JSON string
+
+
+class EvaluationORM(Base):
+    """ORM model for response evaluations."""
+    
+    __tablename__ = "evaluations"
+    
+    id = Column(String, primary_key=True)
+    timestamp = Column(Float, nullable=False)
+    query = Column(String, nullable=False)
+    evaluation = Column(String, nullable=False)  # JSON object
+    structured = Column(Boolean, default=True)
+    meta_evaluation = Column(String)  # JSON object
+
+
+class BaseRepository(Generic[T]):
+    """Base repository interface for data access."""
+    
+    def __init__(self, session: Session):
+        """Initialize with a database session.
         
         Args:
-            summary_data: Dictionary containing summary data including:
-                - id: Unique ID for the summary
-                - timestamp: Creation timestamp
-                - summary_text: The actual summary content
-                - conversation_range: List of conversation IDs included in this summary
-                - version: Summary version number
-                - metadata: Optional dictionary of metadata
-                - embedding: Optional vector embedding of the summary
-                - is_active: Whether this is the currently active global summary
+            session: SQLAlchemy session object
         """
-        c = self.conn.cursor()
-        
-        # Check if we need to add columns
-        c.execute("PRAGMA table_info(rolling_summaries)")
-        columns = [info[1] for info in c.fetchall()]
-        
-        # Add metadata column if it doesn't exist
-        if 'metadata' not in columns:
-            try:
-                c.execute('ALTER TABLE rolling_summaries ADD COLUMN metadata TEXT')
-                print("Added metadata column to rolling_summaries table")
-            except sqlite3.OperationalError as e:
-                # Column may already exist in another session
-                if "duplicate column name" not in str(e):
-                    raise
-                    
-        # Add embedding column if it doesn't exist
-        if 'embedding' not in columns:
-            try:
-                c.execute('ALTER TABLE rolling_summaries ADD COLUMN embedding BLOB')
-                print("Added embedding column to rolling_summaries table")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name" not in str(e):
-                    raise
-        
-        # Add is_active column if it doesn't exist (for only keeping one active global summary)
-        if 'is_active' not in columns:
-            try:
-                c.execute('ALTER TABLE rolling_summaries ADD COLUMN is_active BOOLEAN DEFAULT 0')
-                print("Added is_active column to rolling_summaries table")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name" not in str(e):
-                    raise
-        
-        # Prepare metadata JSON if it exists
-        metadata_json = json.dumps(summary_data.get('metadata', {})) if 'metadata' in summary_data else '{}'
-        
-        # Process embedding if provided
-        embedding_blob = None
-        if 'embedding' in summary_data and summary_data['embedding']:
-            import sqlite_vec
-            embedding_blob = sqlite_vec.serialize_float32(summary_data['embedding'])
-        
-        # Set is_active flag (only one global summary should be active)
-        is_active = summary_data.get('is_active', True)
-        
-        # If this summary is marked as active, deactivate all others
-        if is_active:
-            c.execute("UPDATE rolling_summaries SET is_active = 0")
-        
-        # Insert with metadata and embedding
-        c.execute('''
-        INSERT OR REPLACE INTO rolling_summaries
-        (id, timestamp, summary_text, conversation_range, version, metadata, embedding, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            summary_data['id'],
-            summary_data['timestamp'],
-            summary_data['summary_text'],
-            json.dumps(summary_data['conversation_range']),
-            summary_data['version'],
-            metadata_json,
-            embedding_blob,
-            is_active
-        ))
-        
-        self.conn.commit()
+        self.session = session
+
+
+class ConversationRepository(BaseRepository[Conversation]):
+    """Repository for conversation operations."""
     
-    def store_conversation_summary(self, conversation_id, summary_text, metadata=None, embedding=None):
-        """Store a summary specific to a single conversation.
+    def add(self, conversation: Conversation) -> str:
+        """Add a new conversation.
+        
+        Args:
+            conversation: Conversation object
+            
+        Returns:
+            str: ID of the created conversation
+        """
+        orm_obj = ConversationORM(
+            id=conversation.id,
+            title=conversation.title,
+            timestamp=conversation.timestamp,
+            model=conversation.model,
+            message_count=len(conversation.messages) if conversation.messages else 0,
+            summary=conversation.summary,
+            quality_score=conversation.quality_score,
+            token_count=conversation.token_count,
+            metadata_json=json.dumps(conversation.metadata)
+        )
+        
+        self.session.add(orm_obj)
+        return orm_obj.id
+    
+    def get(self, conversation_id: str) -> Optional[Conversation]:
+        """Get a conversation by ID.
         
         Args:
             conversation_id: ID of the conversation
-            summary_text: The summary text
-            metadata: Optional metadata dictionary
-            embedding: Optional vector embedding
-        
+            
         Returns:
-            bool: True if successful, False otherwise
+            Optional[Conversation]: Found conversation or None
         """
-        c = self.conn.cursor()
-        
-        try:
-            # Check if summary column exists in conversations table
-            c.execute("PRAGMA table_info(conversations)")
-            columns = [info[1] for info in c.fetchall()]
-            
-            # Make sure all needed columns exist
-            if 'summary' not in columns:
-                c.execute("ALTER TABLE conversations ADD COLUMN summary TEXT")
-            
-            # Convert metadata to JSON if present
-            metadata_json = None
-            if metadata:
-                metadata_json = json.dumps(metadata)
-            
-            # Process embedding if provided
-            embedding_blob = None
-            if embedding is not None:
-                import sqlite_vec
-                embedding_blob = sqlite_vec.serialize_float32(embedding)
-            
-            # First check if the conversation exists
-            c.execute("SELECT COUNT(*) FROM conversations WHERE id = ?", (conversation_id,))
-            if c.fetchone()[0] == 0:
-                print(f"Warning: Conversation {conversation_id} does not exist")
-                return False
-            
-            # Update the conversation with the summary
-            if metadata_json:
-                # Fetch existing metadata if any
-                c.execute('SELECT metadata FROM conversations WHERE id = ?', (conversation_id,))
-                row = c.fetchone()
-                existing_metadata = {}
-                
-                if row and row[0]:
-                    try:
-                        existing_metadata = json.loads(row[0])
-                    except (json.JSONDecodeError, TypeError):
-                        existing_metadata = {}
-                
-                # Merge new metadata with existing
-                if metadata:
-                    existing_metadata.update(metadata)
-                
-                # Update with the merged metadata
-                c.execute('UPDATE conversations SET summary = ?, metadata = ? WHERE id = ?', 
-                         (summary_text, json.dumps(existing_metadata), conversation_id))
-            else:
-                # Just update summary
-                c.execute('UPDATE conversations SET summary = ? WHERE id = ?', 
-                        (summary_text, conversation_id))
-            
-            # Update embedding if provided
-            if embedding_blob:
-                # We'll store the conversation embedding in the embeddings table
-                embedding_id = f"summary_{conversation_id}"
-                self.store_embedding(embedding_id, embedding, model="summary-embedding")
-            
-            self.conn.commit()
-            return True
-            
-        except Exception as e:
-            print(f"Error storing conversation summary: {e}")
-            if self.conn:
-                self.conn.rollback()
-            return False
-            
-    def get_active_summary(self):
-        """Get the currently active global rolling summary."""
-        c = self.conn.cursor()
-        
-        # Check if relevant columns exist
-        c.execute("PRAGMA table_info(rolling_summaries)")
-        columns = [info[1] for info in c.fetchall()]
-        has_metadata = 'metadata' in columns
-        has_embedding = 'embedding' in columns
-        has_active = 'is_active' in columns
-        
-        # Build the query based on available columns
-        query = '''
-        SELECT id, timestamp, summary_text, conversation_range, version
-        '''
-        
-        if has_metadata:
-            query += ", metadata"
-        if has_embedding:
-            query += ", embedding"
-            
-        query += " FROM rolling_summaries "
-        
-        if has_active:
-            query += "WHERE is_active = 1 "
-            
-        query += "ORDER BY timestamp DESC LIMIT 1"
-        
-        c.execute(query)
-        row = c.fetchone()
-        
-        if not row:
-            # If no active summary found, try getting the latest one
-            return self.get_latest_summary()
-        
-        # Get basic fields
-        result = {
-            'id': row[0],
-            'timestamp': row[1],
-            'summary_text': row[2],
-            'conversation_range': json.loads(row[3]),
-            'version': row[4]
-        }
-        
-        # Add additional fields if they exist
-        idx = 5
-        if has_metadata and len(row) > idx:
-            try:
-                if row[idx]:
-                    result['metadata'] = json.loads(row[idx])
-                idx += 1
-            except (json.JSONDecodeError, TypeError):
-                result['metadata'] = {}
-                
-        if has_embedding and len(row) > idx:
-            if row[idx]:
-                # The sqlite_vec module doesn't have deserialize_float32
-                # We can load the embedding as a numpy array instead
-                import numpy as np
-                result['embedding'] = np.frombuffer(row[idx], dtype=np.float32)
-        
-        return result
-        
-    def get_latest_summary(self):
-        """Get the most recent rolling summary."""
-        c = self.conn.cursor()
-        
-        # Check if relevant columns exist
-        c.execute("PRAGMA table_info(rolling_summaries)")
-        columns = [info[1] for info in c.fetchall()]
-        has_metadata = 'metadata' in columns
-        has_embedding = 'embedding' in columns
-        
-        # Build the query based on available columns
-        query = '''
-        SELECT id, timestamp, summary_text, conversation_range, version
-        '''
-        
-        if has_metadata:
-            query += ", metadata"
-        if has_embedding:
-            query += ", embedding"
-            
-        query += " FROM rolling_summaries ORDER BY timestamp DESC LIMIT 1"
-        
-        c.execute(query)
-        row = c.fetchone()
-        
-        if not row:
+        orm_obj = self.session.query(ConversationORM).get(conversation_id)
+        if not orm_obj:
             return None
         
-        # Get basic fields
-        result = {
-            'id': row[0],
-            'timestamp': row[1],
-            'summary_text': row[2],
-            'conversation_range': json.loads(row[3]),
-            'version': row[4]
-        }
-        
-        # Add additional fields if they exist
-        idx = 5
-        if has_metadata and len(row) > idx:
-            try:
-                if row[idx]:
-                    result['metadata'] = json.loads(row[idx])
-                idx += 1
-            except (json.JSONDecodeError, TypeError):
-                result['metadata'] = {}
-                
-        if has_embedding and len(row) > idx:
-            if row[idx]:
-                # Convert embedding bytes to numpy array
-                import numpy as np
-                result['embedding'] = np.frombuffer(row[idx], dtype=np.float32)
-        
-        return result
-        
-    def get_conversation_summary(self, conversation_id):
-        """Get the summary for a specific conversation.
+        return self._to_domain(orm_obj)
+    
+    def update(self, conversation: Conversation) -> bool:
+        """Update an existing conversation.
         
         Args:
-            conversation_id: The ID of the conversation
+            conversation: Updated conversation object
             
         Returns:
-            dict: Summary data or None if not found
+            bool: True if updated, False if not found
         """
-        c = self.conn.cursor()
+        orm_obj = self.session.query(ConversationORM).get(conversation.id)
+        if not orm_obj:
+            return False
         
-        # Check if the conversation has a summary
-        c.execute('''
-        SELECT summary, metadata FROM conversations 
-        WHERE id = ? AND summary IS NOT NULL
-        ''', (conversation_id,))
+        orm_obj.title = conversation.title
+        orm_obj.timestamp = conversation.timestamp
+        orm_obj.model = conversation.model
+        orm_obj.message_count = len(conversation.messages) if conversation.messages else 0
+        orm_obj.summary = conversation.summary
+        orm_obj.quality_score = conversation.quality_score
+        orm_obj.token_count = conversation.token_count
+        orm_obj.metadata_json = json.dumps(conversation.metadata)
         
-        row = c.fetchone()
-        if not row or not row[0]:
+        return True
+    
+    def delete(self, conversation_id: str) -> bool:
+        """Delete a conversation by ID.
+        
+        Args:
+            conversation_id: ID of the conversation
+            
+        Returns:
+            bool: True if deleted, False if not found
+        """
+        orm_obj = self.session.query(ConversationORM).get(conversation_id)
+        if not orm_obj:
+            return False
+        
+        self.session.delete(orm_obj)
+        return True
+    
+    def get_all(self, limit: int = 100, offset: int = 0) -> List[Conversation]:
+        """Get multiple conversations with pagination.
+        
+        Args:
+            limit: Maximum number of conversations to retrieve
+            offset: Number of conversations to skip
+            
+        Returns:
+            List[Conversation]: List of conversations
+        """
+        orm_objs = self.session.query(ConversationORM) \
+            .order_by(ConversationORM.timestamp.desc()) \
+            .limit(limit).offset(offset).all()
+            
+        return [self._to_domain(obj) for obj in orm_objs]
+    
+    def get_by_time_range(self, start_time: float, end_time: float) -> List[Conversation]:
+        """Get conversations within a time range.
+        
+        Args:
+            start_time: Start timestamp
+            end_time: End timestamp
+            
+        Returns:
+            List[Conversation]: List of conversations
+        """
+        orm_objs = self.session.query(ConversationORM) \
+            .filter(ConversationORM.timestamp >= start_time) \
+            .filter(ConversationORM.timestamp <= end_time) \
+            .order_by(ConversationORM.timestamp).all()
+            
+        return [self._to_domain(obj) for obj in orm_objs]
+    
+    def _to_domain(self, orm_obj: ConversationORM) -> Conversation:
+        """Convert ORM object to domain model.
+        
+        Args:
+            orm_obj: ORM object
+            
+        Returns:
+            Conversation: Domain object
+        """
+        metadata = {}
+        if orm_obj.metadata_json:
+            try:
+                metadata = json.loads(orm_obj.metadata_json)
+            except json.JSONDecodeError:
+                pass
+        
+        # Don't load messages here to avoid N+1 query problems
+        # They should be loaded separately when needed
+        return Conversation(
+            id=orm_obj.id,
+            title=orm_obj.title,
+            timestamp=orm_obj.timestamp,
+            model=orm_obj.model,
+            summary=orm_obj.summary,
+            quality_score=orm_obj.quality_score,
+            token_count=orm_obj.token_count,
+            metadata=metadata,
+            messages=[]  # Empty list to be loaded separately
+        )
+
+
+class MessageRepository(BaseRepository[Message]):
+    """Repository for message operations."""
+    
+    def add(self, message: Message) -> str:
+        """Add a new message.
+        
+        Args:
+            message: Message object
+            
+        Returns:
+            str: ID of the created message
+        """
+        orm_obj = MessageORM(
+            id=message.id,
+            conversation_id=message.conversation_id,
+            role=message.role.value,
+            content=message.content,
+            timestamp=message.timestamp,
+            metadata_json=json.dumps(message.metadata)
+        )
+        
+        self.session.add(orm_obj)
+        return orm_obj.id
+    
+    def get(self, message_id: str) -> Optional[Message]:
+        """Get a message by ID.
+        
+        Args:
+            message_id: ID of the message
+            
+        Returns:
+            Optional[Message]: Found message or None
+        """
+        orm_obj = self.session.query(MessageORM).get(message_id)
+        if not orm_obj:
             return None
             
-        # Get the summary text
-        summary_text = row[0]
+        return self._to_domain(orm_obj)
+    
+    def get_by_conversation(self, conversation_id: str) -> List[Message]:
+        """Get all messages for a conversation.
         
-        # Parse metadata if available
+        Args:
+            conversation_id: ID of the conversation
+            
+        Returns:
+            List[Message]: List of messages
+        """
+        orm_objs = self.session.query(MessageORM) \
+            .filter(MessageORM.conversation_id == conversation_id) \
+            .order_by(MessageORM.timestamp).all()
+            
+        return [self._to_domain(obj) for obj in orm_objs]
+    
+    def _to_domain(self, orm_obj: MessageORM) -> Message:
+        """Convert ORM object to domain model.
+        
+        Args:
+            orm_obj: ORM object
+            
+        Returns:
+            Message: Domain object
+        """
         metadata = {}
-        if row[1]:
+        if orm_obj.metadata_json:
             try:
-                metadata = json.loads(row[1])
-            except (json.JSONDecodeError, TypeError):
+                metadata = json.loads(orm_obj.metadata_json)
+            except json.JSONDecodeError:
+                pass
+        
+        return Message(
+            id=orm_obj.id,
+            conversation_id=orm_obj.conversation_id,
+            role=Role(orm_obj.role),
+            content=orm_obj.content,
+            timestamp=orm_obj.timestamp,
+            metadata=metadata
+        )
+
+
+class ChunkRepository(BaseRepository[Chunk]):
+    """Repository for chunk operations."""
+    
+    def add(self, chunk: Chunk) -> str:
+        """Add a new chunk.
+        
+        Args:
+            chunk: Chunk object
+            
+        Returns:
+            str: ID of the created chunk
+        """
+        orm_obj = ChunkORM(
+            id=chunk.id,
+            conversation_id=chunk.conversation_id,
+            message_ids=json.dumps(chunk.message_ids),
+            content=chunk.content,
+            timestamp=chunk.timestamp,
+            metadata_json=json.dumps(chunk.metadata)
+        )
+        
+        self.session.add(orm_obj)
+        return orm_obj.id
+    
+    def get(self, chunk_id: str) -> Optional[Chunk]:
+        """Get a chunk by ID.
+        
+        Args:
+            chunk_id: ID of the chunk
+            
+        Returns:
+            Optional[Chunk]: Found chunk or None
+        """
+        orm_obj = self.session.query(ChunkORM).get(chunk_id)
+        if not orm_obj:
+            return None
+            
+        return self._to_domain(orm_obj)
+    
+    def get_by_conversation(self, conversation_id: str) -> List[Chunk]:
+        """Get all chunks for a conversation.
+        
+        Args:
+            conversation_id: ID of the conversation
+            
+        Returns:
+            List[Chunk]: List of chunks
+        """
+        orm_objs = self.session.query(ChunkORM) \
+            .filter(ChunkORM.conversation_id == conversation_id) \
+            .order_by(ChunkORM.timestamp).all()
+            
+        return [self._to_domain(obj) for obj in orm_objs]
+    
+    def _to_domain(self, orm_obj: ChunkORM) -> Chunk:
+        """Convert ORM object to domain model.
+        
+        Args:
+            orm_obj: ORM object
+            
+        Returns:
+            Chunk: Domain object
+        """
+        message_ids = []
+        if orm_obj.message_ids:
+            try:
+                message_ids = json.loads(orm_obj.message_ids)
+            except json.JSONDecodeError:
                 pass
                 
-        # Get embedding if available (from embeddings table)
-        embedding = None
-        embedding_id = f"summary_{conversation_id}"
+        metadata = {}
+        if orm_obj.metadata_json:
+            try:
+                metadata = json.loads(orm_obj.metadata_json)
+            except json.JSONDecodeError:
+                pass
         
-        c.execute('''
-        SELECT embedding FROM embeddings
-        WHERE id = ?
-        ''', (embedding_id,))
-        
-        embedding_row = c.fetchone()
-        if embedding_row and embedding_row[0]:
-            # Convert embedding bytes to numpy array
-            import numpy as np
-            embedding = np.frombuffer(embedding_row[0], dtype=np.float32)
-            
-        # Build and return summary data
-        return {
-            'conversation_id': conversation_id,
-            'summary_text': summary_text,
-            'metadata': metadata,
-            'embedding': embedding
-        }
+        return Chunk(
+            id=orm_obj.id,
+            conversation_id=orm_obj.conversation_id,
+            message_ids=message_ids,
+            content=orm_obj.content,
+            timestamp=orm_obj.timestamp,
+            metadata=metadata
+        )
+
+
+class UnitOfWork:
+    """Manages a transaction with multiple repositories."""
     
-    def get_summaries_by_theme(self, theme_query, limit=5, embedding=None):
-        """Get summaries matching a theme query.
+    def __init__(self, session_factory: sessionmaker):
+        """Initialize with a session factory.
         
         Args:
-            theme_query: Text query to search for
-            limit: Maximum number of summaries to return
-            embedding: Optional query embedding vector for semantic search
-            
-        Returns:
-            list: Matching summaries with relevance scores
+            session_factory: SQLAlchemy sessionmaker
         """
-        c = self.conn.cursor()
+        self.session_factory = session_factory
+        self.session = None
         
-        # Check if columns exist
-        c.execute("PRAGMA table_info(rolling_summaries)")
-        columns = [info[1] for info in c.fetchall()]
-        has_metadata = 'metadata' in columns
-        has_embedding = 'embedding' in columns
-        
-        if not has_metadata:
-            return []
-            
-        # If we have embedding data and a query embedding, use vector similarity
-        if has_embedding and embedding is not None:
-            # Convert embedding to sqlite-vec format
-            import sqlite_vec
-            embedding_blob = sqlite_vec.serialize_float32(embedding)
-            
-            # Use vector similarity search
-            c.execute('''
-            SELECT id, timestamp, summary_text, version, metadata, 
-                   vec_distance_cosine(embedding, ?) AS distance
-            FROM rolling_summaries
-            WHERE embedding IS NOT NULL
-            ORDER BY distance ASC
-            LIMIT ?
-            ''', (embedding_blob, limit))
-            
-            matching_summaries = []
-            for row in c.fetchall():
-                try:
-                    metadata = json.loads(row[4]) if row[4] else {}
-                    distance = row[5] if len(row) > 5 else 1.0
-                    similarity = 1.0 - distance
-                    
-                    matching_summaries.append({
-                        'id': row[0],
-                        'timestamp': row[1],
-                        'summary_text': row[2],
-                        'version': row[3],
-                        'metadata': metadata,
-                        'relevance': similarity
-                    })
-                except (json.JSONDecodeError, TypeError) as e:
-                    print(f"Error processing summary metadata: {e}")
-                    continue
-            
-            return matching_summaries
-        
-        # Fallback to metadata-based search if no embeddings
-        # First try full-text-search if available
-        try:
-            # Check if FTS is available by creating a temporary table
-            c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.fts_test USING fts5(content)")
-            c.execute("DROP TABLE IF EXISTS temp.fts_test")
-            
-            # FTS is available, use it for better text search
-            matching_summaries = []
-            
-            # Search in both summary text and metadata
-            c.execute('''
-            SELECT id, timestamp, summary_text, version, metadata
-            FROM rolling_summaries
-            WHERE metadata IS NOT NULL
-            ORDER BY timestamp DESC
-            ''')
-            
-            for row in c.fetchall():
-                try:
-                    metadata = json.loads(row[4]) if row[4] else {}
-                    themes = metadata.get('themes', [])
-                    topics = metadata.get('topics', [])
-                    summary_text = row[2]
-                    
-                    # Create a searchable text combining summary and metadata
-                    searchable_text = summary_text + " " + " ".join(themes) + " " + " ".join(topics)
-                    
-                    # Calculate relevance using term frequency
-                    terms = theme_query.lower().split()
-                    if not terms:
-                        continue
-                        
-                    # Count how many query terms appear in the searchable text
-                    term_count = sum(1 for term in terms if term.lower() in searchable_text.lower())
-                    
-                    # Calculate relevance score (0-1)
-                    relevance = term_count / len(terms) if terms else 0
-                    
-                    # Only include if it has some relevance
-                    if relevance > 0:
-                        matching_summaries.append({
-                            'id': row[0],
-                            'timestamp': row[1],
-                            'summary_text': row[2],
-                            'version': row[3],
-                            'metadata': metadata,
-                            'relevance': relevance
-                        })
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                    
-            # Sort by relevance and limit results
-            matching_summaries.sort(key=lambda x: x.get('relevance', 0), reverse=True)
-            return matching_summaries[:limit]
-            
-        except sqlite3.OperationalError:
-            # FTS not available, fall back to simple matching
-            c.execute('''
-            SELECT id, timestamp, summary_text, version, metadata
-            FROM rolling_summaries
-            WHERE metadata IS NOT NULL
-            ORDER BY timestamp DESC
-            ''')
-            
-            matching_summaries = []
-            for row in c.fetchall():
-                try:
-                    metadata = json.loads(row[4]) if row[4] else {}
-                    themes = metadata.get('themes', [])
-                    topics = metadata.get('topics', [])
-                    
-                    # Simple string matching search
-                    theme_query_lower = theme_query.lower()
-                    
-                    # Check for matches in themes or topics
-                    theme_matches = [theme for theme in themes 
-                                   if theme_query_lower in theme.lower()]
-                    topic_matches = [topic for topic in topics 
-                                   if theme_query_lower in topic.lower()]
-                    
-                    # Calculate a simple relevance score based on match count
-                    relevance = (len(theme_matches) * 2 + len(topic_matches)) / (len(themes) + len(topics)) if themes or topics else 0
-                    
-                    if theme_matches or topic_matches:
-                        matching_summaries.append({
-                            'id': row[0],
-                            'timestamp': row[1],
-                            'summary_text': row[2],
-                            'version': row[3],
-                            'metadata': metadata,
-                            'relevance': min(1.0, relevance)
-                        })
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            
-            return matching_summaries[:limit]
+        # Repositories will be instantiated during __enter__
+        self.conversations = None
+        self.messages = None
+        self.chunks = None
+        # Add other repositories as needed
     
-    def close(self):
-        """Close the database connection."""
-        if self.conn:
-            self.conn.close()
+    def __enter__(self):
+        """Start a new transaction.
+        
+        Returns:
+            UnitOfWork: Self for context manager
+        """
+        self.session = self.session_factory()
+        
+        # Create repositories with the current session
+        self.conversations = ConversationRepository(self.session)
+        self.messages = MessageRepository(self.session)
+        self.chunks = ChunkRepository(self.session)
+        # Add other repositories as needed
+        
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """End the transaction with commit or rollback.
+        
+        Args:
+            exc_type: Exception type
+            exc_val: Exception value
+            exc_tb: Exception traceback
+        """
+        if exc_type:
+            self.rollback()
+        else:
+            self.commit()
+            
+        self.session.close()
+        self.session = None
+    
+    def commit(self):
+        """Commit the current transaction."""
+        self.session.commit()
+    
+    def rollback(self):
+        """Rollback the current transaction."""
+        self.session.rollback()
+
+
+class DatabaseManager:
+    """Manages database connections and migrations."""
+    
+    def __init__(self):
+        """Initialize database connection and setup."""
+        settings = get_settings()
+        db_path = settings.database.db_path
+        
+        # Create directory if needed
+        db_dir = Path(db_path).parent
+        if db_dir and not db_dir.exists():
+            db_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create engine with connection pooling
+        self.engine = create_engine(
+            f"sqlite:///{db_path}",
+            poolclass=QueuePool,
+            pool_size=settings.database.connection_pool_size,
+            max_overflow=10,
+            connect_args={"check_same_thread": False},
+        )
+        
+        # Create session factory
+        self.session_factory = sessionmaker(bind=self.engine)
+        
+        # Initialize schema
+        self._initialize_schema()
+    
+    def _initialize_schema(self):
+        """Create tables if they don't exist."""
+        Base.metadata.create_all(self.engine)
+        
+        # Initialize any additional database functionality
+        # such as extensions or custom functions
+        with self.engine.connect() as conn:
+            # Example: Enable foreign keys in SQLite
+            conn.execute(text("PRAGMA foreign_keys = ON"))
+            
+            # Here we would enable vector search extensions
+            # This is a placeholder for integrating with vector DBs
+    
+    def get_unit_of_work(self) -> UnitOfWork:
+        """Get a unit of work for transaction management.
+        
+        Returns:
+            UnitOfWork: A new unit of work
+        """
+        return UnitOfWork(self.session_factory)
+    
+    @contextmanager
+    def session(self) -> Session:
+        """Context manager for database sessions.
+        
+        Yields:
+            Session: SQLAlchemy session
+        """
+        session = self.session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+
+# Create database manager singleton
+db_manager = DatabaseManager()
+
+
+def get_db_manager() -> DatabaseManager:
+    """Get the database manager instance.
+    
+    Returns:
+        DatabaseManager: The database manager
+    """
+    return db_manager
