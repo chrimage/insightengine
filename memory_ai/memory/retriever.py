@@ -32,7 +32,7 @@ class MemoryRetriever:
     
     def retrieve_by_date_range(self, start_date, end_date, limit=10):
         """Retrieve memories from a specific date range."""
-        c = self.db.conn.cursor()
+        c = self.db.sqlite_conn.cursor()
         
         # Convert dates to timestamps
         start_ts = start_date.timestamp()
@@ -50,10 +50,10 @@ class MemoryRetriever:
         results = []
         for row in c.fetchall():
             results.append({
-                'source_id': row[0],
-                'title': row[1],
-                'timestamp': row[2],
-                'model': row[3]
+                'source_id': row['id'],
+                'title': row['title'],
+                'timestamp': row['timestamp'],
+                'model': row['model']
             })
         
         return results

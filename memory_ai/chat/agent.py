@@ -28,13 +28,11 @@ class MemoryEnhancedAgent:
         prompt = PromptTemplates.format_with_context(context, metadata)
         
         # Generate response
-        response = self.gemini_client.generate_content(
+        response_text = self.gemini_client.generate_content(
             prompt=prompt,
             max_output_tokens=8000,
             temperature=0.7
         )
-        
-        response_text = response.text
         
         # Add to conversation history
         self.conversation_history.append({"role": "assistant", "content": response_text})
@@ -52,12 +50,12 @@ class MemoryEnhancedAgent:
             # This would ideally be done based on feedback, but we'll assume 
             # memories were helpful for now
             for memory_id in metadata["memory_ids"]:
-                self.db.conn.execute('''
+                self.db.sqlite_conn.execute('''
                 UPDATE conversations 
                 SET quality_score = quality_score + 0.01
                 WHERE id = ? AND quality_score < 1.0
                 ''', (memory_id,))
-                self.db.conn.commit()
+                self.db.sqlite_conn.commit()
         
         # Update insight performance if insights were used
         if "insight_ids" in metadata:

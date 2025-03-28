@@ -208,7 +208,7 @@ class MemoryQualityAssessor:
             quality_score: The overall quality score
             metrics: Optional dictionary of individual quality dimension scores
         """
-        c = self.db.conn.cursor()
+        c = self.db.sqlite_conn.cursor()
         
         # Store the overall quality score
         c.execute('UPDATE conversations SET quality_score = ? WHERE id = ?', 
@@ -217,13 +217,13 @@ class MemoryQualityAssessor:
         # Store detailed metrics if provided
         if metrics:
             # Get existing metadata if any
-            c.execute('SELECT metadata FROM conversations WHERE id = ?', (memory_id,))
+            c.execute('SELECT metadata_json FROM conversations WHERE id = ?', (memory_id,))
             row = c.fetchone()
             
             existing_metadata = {}
-            if row and row[0]:
+            if row and row['metadata_json']:
                 try:
-                    existing_metadata = json.loads(row[0])
+                    existing_metadata = json.loads(row['metadata_json'])
                 except (json.JSONDecodeError, TypeError):
                     existing_metadata = {}
             
@@ -235,10 +235,10 @@ class MemoryQualityAssessor:
             existing_metadata['quality_metrics'].update(metrics)
             
             # Store updated metadata
-            c.execute('UPDATE conversations SET metadata = ? WHERE id = ?',
+            c.execute('UPDATE conversations SET metadata_json = ? WHERE id = ?',
                      (json.dumps(existing_metadata), memory_id))
         
-        self.db.conn.commit()
+        self.db.sqlite_conn.commit()
     
     def filter_memories(self, memories):
         """Filter memories based on quality scores.
@@ -255,18 +255,18 @@ class MemoryQualityAssessor:
             memory_id = memory['source_id']
             
             # Get stored quality score
-            c = self.db.conn.cursor()
-            c.execute('SELECT quality_score, metadata FROM conversations WHERE id = ?', (memory_id,))
+            c = self.db.sqlite_conn.cursor()
+            c.execute('SELECT quality_score, metadata_json FROM conversations WHERE id = ?', (memory_id,))
             row = c.fetchone()
             
-            if row and row[0] is not None:
+            if row and row['quality_score'] is not None:
                 # Use stored quality score
-                quality_score = row[0]
+                quality_score = row['quality_score']
                 
                 # Add detailed metrics if available
-                if row[1]:
+                if row['metadata_json']:
                     try:
-                        metadata = json.loads(row[1])
+                        metadata = json.loads(row['metadata_json'])
                         if 'quality_metrics' in metadata:
                             memory['quality_metrics'] = metadata['quality_metrics']
                     except (json.JSONDecodeError, TypeError):
@@ -280,7 +280,7 @@ class MemoryQualityAssessor:
                 ''', (memory_id,))
                 
                 messages = c.fetchall()
-                content = "\n".join([msg[0] for msg in messages])
+                content = "\n".join([msg['content'] for msg in messages])
                 
                 # Assess quality if not already scored
                 quality_score = self.assess_memory_quality(memory_id, content)
@@ -323,14 +323,14 @@ class MemoryQualityAssessor:
             feedback: Optional dictionary with detailed feedback
         """
         # Get current score and metadata
-        c = self.db.conn.cursor()
-        c.execute('SELECT quality_score, metadata FROM conversations WHERE id = ?', (memory_id,))
+        c = self.db.sqlite_conn.cursor()
+        c.execute('SELECT quality_score, metadata_json FROM conversations WHERE id = ?', (memory_id,))
         row = c.fetchone()
         
         if not row:
             return
             
-        current_score = row[0] or 0.5  # Default if NULL
+        current_score = row['quality_score'] or 0.5  # Default if NULL
         
         # Simple adjustment based on feedback
         adjustment = 0.05 if was_helpful else -0.05
@@ -340,9 +340,9 @@ class MemoryQualityAssessor:
         
         # Update metadata with feedback history
         metadata = {}
-        if row[1]:
+        if row['metadata_json']:
             try:
-                metadata = json.loads(row[1])
+                metadata = json.loads(row['metadata_json'])
             except (json.JSONDecodeError, TypeError):
                 metadata = {}
                 
@@ -366,9 +366,9 @@ class MemoryQualityAssessor:
         metadata['feedback_history'].append(feedback_entry)
         
         # Update the score and metadata
-        c.execute('UPDATE conversations SET quality_score = ?, metadata = ? WHERE id = ?', 
+        c.execute('UPDATE conversations SET quality_score = ?, metadata_json = ? WHERE id = ?', 
                  (new_score, json.dumps(metadata), memory_id))
-        self.db.conn.commit()
+        self.db.sqlite_conn.commit()
         
         if self.debug:
             print(f"Updated quality score for memory {memory_id}: {current_score:.3f} -> {new_score:.3f} (helpful: {was_helpful})")

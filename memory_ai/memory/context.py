@@ -24,7 +24,7 @@ class ContextAssembler:
         }
         
         # 1. Get the latest rolling summary
-        summary = self.db.get_latest_summary()
+        summary = self.db.get_active_summary()
         if summary:
             summary_text = f"## CONVERSATION HISTORY SUMMARY\n\n{summary['summary_text']}"
             summary_tokens = len(self.tokenizer.encode(summary_text))
@@ -49,7 +49,7 @@ class ContextAssembler:
                 memory_text = f"MEMORY {i}:\n"
                 
                 # Get conversation details
-                c = self.db.conn.cursor()
+                c = self.db.sqlite_conn.cursor()
                 c.execute('''
                 SELECT title, timestamp FROM conversations
                 WHERE id = ?
@@ -57,8 +57,8 @@ class ContextAssembler:
                 
                 conv = c.fetchone()
                 if conv:
-                    memory_text += f"Title: {conv[0]}\n"
-                    memory_text += f"Date: {datetime.fromtimestamp(conv[1]).strftime('%Y-%m-%d')}\n"
+                    memory_text += f"Title: {conv['title']}\n"
+                    memory_text += f"Date: {datetime.fromtimestamp(conv['timestamp']).strftime('%Y-%m-%d')}\n"
                 
                 # Get content
                 c.execute('''

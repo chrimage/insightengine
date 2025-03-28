@@ -630,8 +630,63 @@ class MemoryDatabase:
 
         # For direct SQL queries - use SQLite connection for legacy code
         import sqlite3
+        import numpy as np
         self.sqlite_conn = sqlite3.connect(db_path)
         self.sqlite_conn.row_factory = sqlite3.Row
+        
+    def search_similar(self, embedding, top_k=5, source_type="conversation"):
+        """Search for similar items based on embedding similarity.
+        
+        This is a simple implementation that loads vectors into memory and
+        computes cosine similarity directly. For production use with large datasets,
+        this should be replaced with a proper vector database.
+        
+        Args:
+            embedding: Query embedding vector
+            top_k: Number of results to return
+            source_type: Type of source to search (conversation, summary, etc.)
+            
+        Returns:
+            List of dictionaries with source_id and similarity score
+        """
+        import numpy as np
+        from scipy.spatial.distance import cosine
+        
+        # Convert query embedding to numpy array
+        query_vector = np.array(embedding)
+        
+        # Get all embeddings of the specified type
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute("""
+            SELECT id, source_id, vector_blob, dimensions
+            FROM embeddings
+            WHERE source_type LIKE ?
+        """, (f"%{source_type}%",))
+        
+        results = []
+        for row in cursor.fetchall():
+            try:
+                # Convert blob to numpy array
+                vector_blob = row['vector_blob']
+                dimensions = row['dimensions']
+                vector = np.frombuffer(vector_blob, dtype=np.float32)
+                
+                # Compute similarity
+                if len(vector) == len(query_vector):
+                    similarity = 1 - cosine(vector, query_vector)  # Cosine similarity (1 is most similar)
+                    results.append({
+                        'source_id': row['source_id'],
+                        'similarity': float(similarity)
+                    })
+            except Exception as e:
+                print(f"Error processing embedding {row['id']}: {str(e)}")
+                continue
+        
+        # Sort by similarity (highest first)
+        results.sort(key=lambda x: x['similarity'], reverse=True)
+        
+        # Return top_k results
+        return results[:top_k]
         
     def store_embedding(self, source_id: str, vector: List[float], source_type: str = "conversation", model: str = "gemini-embedding") -> None:
         """Store an embedding in the database.

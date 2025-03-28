@@ -165,7 +165,17 @@ class GeminiClient:
                         task_type="retrieval_document"
                     )
                     
-                    embedding = result["embedding"]
+                    # Handle different result formats from different versions of the API
+                    if isinstance(result, dict) and "embedding" in result:
+                        # Old API format
+                        embedding = result["embedding"]
+                    elif hasattr(result, "embedding"):
+                        # New API format as object with attribute
+                        embedding = result.embedding
+                    else:
+                        # Try to extract embedding from unknown format
+                        logger.warning(f"Unknown embedding result format: {type(result)}")
+                        embedding = None
                     if embedding and len(embedding) > 0:
                         all_embeddings.append(embedding)
                     else:
@@ -202,7 +212,17 @@ class GeminiClient:
                     task_type="retrieval_document"
                 )
                 
-                embedding = result["embedding"]
+                # Handle different result formats from different versions of the API
+                if isinstance(result, dict) and "embedding" in result:
+                    # Old API format
+                    embedding = result["embedding"]
+                elif hasattr(result, "embedding"):
+                    # New API format as object with attribute
+                    embedding = result.embedding
+                else:
+                    # Try to extract embedding from unknown format
+                    logger.warning(f"Unknown embedding result format: {type(result)}")
+                    embedding = None
                 if embedding and len(embedding) > 0:
                     return embedding
                 else:
@@ -211,6 +231,33 @@ class GeminiClient:
             except Exception as e:
                 logger.error(f"Error generating embedding: {str(e)}")
                 return [0.0] * 768  # Return zero embedding
+    
+    @retry(
+        retry=retry_if_exception_type(Exception),  # retry on any exception
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        before_sleep=before_sleep_log(logger, logging.WARNING)
+    )
+    def generate_content(
+        self, 
+        prompt: str, 
+        temperature: float = 0.7,
+        max_output_tokens: Optional[int] = None,
+        top_p: float = 0.95,
+        top_k: int = 64,
+        json_mode: bool = False,
+        system_prompt: Optional[str] = None
+    ) -> str:
+        """Alias for generate_text to maintain compatibility with different naming."""
+        return self.generate_text(
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_output_tokens,
+            top_p=top_p,
+            top_k=top_k,
+            json_mode=json_mode,
+            system_prompt=system_prompt
+        )
     
     @retry(
         retry=retry_if_exception_type(Exception),  # retry on any exception
@@ -277,8 +324,27 @@ class GeminiClient:
             )
         
         # Send the user prompt and get the response
-        response = chat_session.send_message(prompt)
-        return response.text
+        try:
+            response = chat_session.send_message(prompt)
+            # For new versions of the API, the response has a .text property
+            if hasattr(response, 'text'):
+                return response.text
+            
+            # For older versions, the response might be different
+            # Try different ways to extract the text content
+            if isinstance(response, str):
+                return response
+            elif hasattr(response, 'parts'):
+                return ''.join(part.text for part in response.parts)
+            elif hasattr(response, 'candidates'):
+                return response.candidates[0].content.parts[0].text
+            else:
+                # Last resort - convert to string and hope it contains the content
+                return str(response)
+        except Exception as e:
+            logger.error(f"Error generating text: {e}")
+            # Return a placeholder message rather than failing completely
+            return f"[Unable to generate response due to API error: {str(e)}]"
     
     def generate_structured_response(
         self,
